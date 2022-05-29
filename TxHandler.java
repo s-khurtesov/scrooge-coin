@@ -1,4 +1,5 @@
 import java.util.ArrayList;
+import java.util.Arrays;
 
 public class TxHandler {
     private UTXOPool utxoPool;
@@ -46,7 +47,7 @@ public class TxHandler {
             // (3) no UTXO is claimed multiple times by {@code tx}
             for (int j = i + 1; j < inputs.size(); j++) {
                 Transaction.Input anotherInput = inputs.get(j);
-                if (input.prevTxHash == anotherInput.prevTxHash && 
+                if (Arrays.equals(input.prevTxHash, anotherInput.prevTxHash) && 
                     input.outputIndex == anotherInput.outputIndex) {
                     return false;
                 }
