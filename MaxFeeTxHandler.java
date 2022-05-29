@@ -105,7 +105,7 @@ public class MaxFeeTxHandler {
                 outputSum += outputValue;
             }
     
-            return inputSum - outputSum;
+            return (inputSum - outputSum) / tx.getRawTx().length;
         }
 
     }
