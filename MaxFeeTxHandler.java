@@ -1,6 +1,7 @@
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.HashMap;
 
 public class MaxFeeTxHandler {
     private UTXOPool utxoPool;
@@ -82,22 +83,22 @@ public class MaxFeeTxHandler {
 
         @Override
         public int compare(Transaction tx1, Transaction tx2) {
-           return Double.compare(getFee(tx1), getFee(tx2));
+            return Double.compare(getFeeMinusPotencialLoss(tx1), getFeeMinusPotencialLoss(tx2));
         }
     
-        private double getFee(Transaction tx) {
+        public double getFee(Transaction tx) {
             ArrayList<Transaction.Input> inputs = tx.getInputs();
             double inputSum = 0;
             for (int i = 0; i < inputs.size(); i++) {
                 Transaction.Input input = inputs.get(i);
                 UTXO utxo = new UTXO(input.prevTxHash, input.outputIndex);
                 Transaction.Output prevOutput = utxoPool.getTxOutput(utxo);
-    
+                
                 if (prevOutput != null) {
                     inputSum += prevOutput.value;
                 }
             }
-    
+            
             ArrayList<Transaction.Output> outputs = tx.getOutputs();
             double outputSum = 0;
             for (Transaction.Output output : outputs) {
@@ -107,7 +108,24 @@ public class MaxFeeTxHandler {
     
             return inputSum - outputSum;
         }
+        
+        public double getFeeMinusPotencialLoss(Transaction tx) {
+            double inputsPotencialLoss = 0;
+            ArrayList<Transaction.Input> inputs = tx.getInputs();
+            double txFee = getFee(tx);
+            for (int i = 0; i < inputs.size(); i++) {
+                Transaction.Input input = inputs.get(i);
+                
+                inputsPotencialLoss += inputToFee.get(input);
+            }
+            return 2 * txFee - inputsPotencialLoss;
+        }
+        
 
+        private HashMap<Transaction.Input, Double> inputToFee;
+        public void setInputToFee(HashMap<Transaction.Input, Double> inputToFee) {
+            this.inputToFee = inputToFee;
+        }
     }
 
     /**
@@ -116,16 +134,34 @@ public class MaxFeeTxHandler {
      * updating the current UTXO pool as appropriate.
      */
     public Transaction[] handleTxs(Transaction[] possibleTxs) {
+        ArrayList<Transaction> validTxs = new ArrayList<Transaction>();
         ArrayList<Transaction> acceptedTxs = new ArrayList<Transaction>();
 
+        HashMap<Transaction.Input, Double> inputToFee = new HashMap<Transaction.Input, Double>();
         TransactionFeesComparator feeComparator = new TransactionFeesComparator();
-        Arrays.sort(possibleTxs, feeComparator.reversed());
-
         for (Transaction tx : possibleTxs) {
             if (! isValidTx(tx)) {
                 continue;
             }
+            validTxs.add(tx);
 
+            Double txFee = feeComparator.getFee(tx);
+
+            ArrayList<Transaction.Input> inputs = tx.getInputs();
+            for (int i = 0; i < inputs.size(); i++) {
+                Transaction.Input input = inputs.get(i);
+                
+                inputToFee.compute(input, (k, v) -> (v == null) ? txFee / inputs.size() : v + txFee / inputs.size());
+            }
+        }
+
+        feeComparator.setInputToFee(inputToFee);
+        validTxs.sort(feeComparator.reversed());
+
+        for (Transaction tx : validTxs) {
+            if (! isValidTx(tx)) {
+                continue;
+            }
             acceptedTxs.add(tx);
 
             // Remove utxo associated with tx's inputs
