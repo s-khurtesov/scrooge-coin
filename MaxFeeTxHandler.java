@@ -77,37 +77,84 @@ public class MaxFeeTxHandler {
             return false;
         }
     }
+    
+    private double getFee(Transaction tx) {
+        ArrayList<Transaction.Input> inputs = tx.getInputs();
+        double inputSum = 0;
+        for (int i = 0; i < inputs.size(); i++) {
+            Transaction.Input input = inputs.get(i);
+            UTXO utxo = new UTXO(input.prevTxHash, input.outputIndex);
+            Transaction.Output prevOutput = utxoPool.getTxOutput(utxo);
 
-    public class TransactionFeesComparator implements Comparator<Transaction> {
-
-        @Override
-        public int compare(Transaction tx1, Transaction tx2) {
-           return Double.compare(getFee(tx1), getFee(tx2));
+            if (prevOutput != null) {
+                inputSum += prevOutput.value;
+            }
         }
+
+        ArrayList<Transaction.Output> outputs = tx.getOutputs();
+        double outputSum = 0;
+        for (Transaction.Output output : outputs) {
+            double outputValue = output.value;
+            outputSum += outputValue;
+        }
+
+        return inputSum - outputSum;
+    }
+
+
+    private void recursive_search(
+        Transaction[] curTxs, int length, ArrayList<Transaction> txsList, 
+        Transaction[] bestTxs, double[] bestFee, int[] bestLength,
+        UTXOPool defUtxoPool, int depth) {
+            
+        if (depth < length) {
+            for (int i = 0; i < txsList.size(); i++) {
+                curTxs[depth] = txsList.remove(i);
+                recursive_search(curTxs, length, txsList, bestTxs, bestFee, bestLength, defUtxoPool, depth + 1);
+                txsList.add(i, curTxs[depth]);
+            }
+        }
+        else {
+            double curFee = 0;
+            this.utxoPool = new UTXOPool(defUtxoPool);
+            ArrayList<Transaction> acceptedTxs = new ArrayList<Transaction>();
+            for (Transaction tx : curTxs) {
+                if (! isValidTx(tx)) {
+                    continue;
+                }
+                acceptedTxs.add(tx);
+
+                curFee += getFee(tx);
     
-        private double getFee(Transaction tx) {
-            ArrayList<Transaction.Input> inputs = tx.getInputs();
-            double inputSum = 0;
-            for (int i = 0; i < inputs.size(); i++) {
-                Transaction.Input input = inputs.get(i);
-                UTXO utxo = new UTXO(input.prevTxHash, input.outputIndex);
-                Transaction.Output prevOutput = utxoPool.getTxOutput(utxo);
+                // Remove utxo associated with tx's inputs
+                ArrayList<Transaction.Input> inputs = tx.getInputs();
+                for (int i = 0; i < inputs.size(); i++) {
+                    Transaction.Input input = inputs.get(i);
+                    UTXO utxo = new UTXO(input.prevTxHash, input.outputIndex);
+                    
+                    // Transaction is correct, so this utxo is definitely in the pool
+                    utxoPool.removeUTXO(utxo);
+                }
     
-                if (prevOutput != null) {
-                    inputSum += prevOutput.value;
+                // Add utxo associated with tx's outputs
+                byte[] txHash = tx.getHash();
+                ArrayList<Transaction.Output> outputs = tx.getOutputs();
+                for (int i = 0; i < outputs.size(); i++) {
+                    Transaction.Output output = outputs.get(i);
+                    UTXO utxo = new UTXO(txHash, i);
+    
+                    utxoPool.addUTXO(utxo, output);
                 }
             }
-    
-            ArrayList<Transaction.Output> outputs = tx.getOutputs();
-            double outputSum = 0;
-            for (Transaction.Output output : outputs) {
-                double outputValue = output.value;
-                outputSum += outputValue;
-            }
-    
-            return inputSum - outputSum;
-        }
 
+            if (curFee > bestFee[0]) {
+                bestFee[0] = curFee;
+                bestLength[0] = curTxs.length;
+                for (int i = 0; i < curTxs.length; i++) {
+                    bestTxs[i] = curTxs[i];
+                }
+            }
+        }
     }
 
     /**
@@ -116,18 +163,22 @@ public class MaxFeeTxHandler {
      * updating the current UTXO pool as appropriate.
      */
     public Transaction[] handleTxs(Transaction[] possibleTxs) {
-        ArrayList<Transaction> acceptedTxs = new ArrayList<Transaction>();
-
-        TransactionFeesComparator feeComparator = new TransactionFeesComparator();
-        Arrays.sort(possibleTxs, feeComparator.reversed());
-
+        ArrayList<Transaction> validTxs = new ArrayList<Transaction>();
         for (Transaction tx : possibleTxs) {
-            if (! isValidTx(tx)) {
-                continue;
+            if (isValidTx(tx)) {
+                validTxs.add(tx);
             }
+        }
 
-            acceptedTxs.add(tx);
+        Transaction[] bestTxs = new Transaction[validTxs.size()];
+        double[] bestFee = new double[1];
+        bestFee[0] = -1;
+        int[] bestLength = new int[1];
+        bestLength[0] = -1;
+        recursive_search(new Transaction[validTxs.size()], validTxs.size(), validTxs, bestTxs, bestFee, bestLength, this.utxoPool, 0);
+        bestTxs = Arrays.copyOfRange(bestTxs, 0, bestLength[0]);
 
+        for (Transaction tx : bestTxs) {
             // Remove utxo associated with tx's inputs
             ArrayList<Transaction.Input> inputs = tx.getInputs();
             for (int i = 0; i < inputs.size(); i++) {
@@ -149,7 +200,7 @@ public class MaxFeeTxHandler {
             }
         }
         
-        return acceptedTxs.toArray(new Transaction[0]);
+        return bestTxs;
     }
 
 }
